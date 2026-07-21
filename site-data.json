@@ -1,0 +1,10 @@
+{
+  "pages": {
+    "home": "<div style=\"font-family:system-ui,sans-serif;max-width:680px;margin:80px auto;padding:0 24px;text-align:center\"><h1 style=\"font-size:32px;font-weight:700;margin-bottom:12px\">Template placeholder</h1><p style=\"color:#666;line-height:1.6\">This repo's <code>site-data.json</code> has not been populated yet. The AI Build workflow writes the client's approved wireframe here, then this page renders it exactly.</p></div>"
+  },
+  "nav": [{ "key": "home", "label": "Home", "route": "/" }],
+  "pageOrder": ["home"],
+  "frameMeta": { "dataFont": "", "dataLayout": "", "dataHero": "", "vars": {} },
+  "fontHref": "",
+  "css": ""
+}

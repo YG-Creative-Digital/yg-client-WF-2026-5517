@@ -1,0 +1,101 @@
+name: Build and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Submission ref (e.g. WF-2026-4831)'
+        required: true
+      notify:
+        description: "Email the client when done ('false' = silent rebuild for internal review)"
+        required: false
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      REF: ${{ inputs.ref }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs and secrets
+        run: |
+          if [ -z "$REF" ]; then
+            echo "::error::No submission ref provided"; exit 1
+          fi
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY org secrets are not set"; exit 1
+          fi
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID org secrets are not set"; exit 1
+          fi
+
+      - name: Fetch wireframe data from Supabase
+        run: |
+          RESPONSE=$(curl -s \
+            "$SUPABASE_URL/rest/v1/submissions?ref=eq.$REF&select=wireframe_html,business_name" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY")
+          echo "$RESPONSE" | jq -r '.[0].wireframe_html' > site-data.json
+          if ! jq -e '.pages' site-data.json > /dev/null 2>&1; then
+            echo "::error::wireframe_html did not contain a valid pages object"; exit 1
+          fi
+          # Expose business name as the page <title>
+          BIZ=$(echo "$RESPONSE" | jq -r '.[0].business_name // empty')
+          if [ -n "$BIZ" ]; then echo "SITE_TITLE=$BIZ" >> "$GITHUB_ENV"; fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate static site (no build)
+        run: node generate-static.js
+
+      - name: Deploy to Cloudflare Pages
+        run: |
+          PROJECT="yg-client-$(echo "$REF" | tr '[:upper:]' '[:lower:]')"
+          npx wrangler@3 pages project create "$PROJECT" --production-branch=main 2>/dev/null || true
+          npx wrangler@3 pages deploy ./out --project-name="$PROJECT" --branch=main
+
+      - name: Mark deployed in Supabase
+        run: |
+          curl -s -X PATCH \
+            "$SUPABASE_URL/rest/v1/submissions?ref=eq.$REF" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d '{"status":"deployed"}' >/dev/null
+          echo "Marked $REF as deployed"
+
+      - name: Notify client — preview ready
+        if: ${{ inputs.notify != 'false' }}
+        env:
+          PREVIEW_EMAIL_SECRET: ${{ secrets.PREVIEW_EMAIL_SECRET }}
+        run: |
+          if [ -z "$PREVIEW_EMAIL_SECRET" ]; then
+            echo "::warning::PREVIEW_EMAIL_SECRET not set — client email skipped"
+            exit 0
+          fi
+          PROJECT="yg-client-$(echo "$REF" | tr '[:upper:]' '[:lower:]')"
+          PREVIEW_URL="https://${PROJECT}.pages.dev"
+          echo "Sending preview notification for $REF → $PREVIEW_URL"
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://wyrframeweb.netlify.app/api/send-preview-email" \
+            -H "Content-Type: application/json" \
+            -H "x-yg-secret: $PREVIEW_EMAIL_SECRET" \
+            -d "{\"ref\":\"$REF\",\"previewUrl\":\"$PREVIEW_URL\"}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Response body: $BODY"
+          echo "HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Preview email returned HTTP $HTTP_CODE — check Netlify function logs"
+          fi
