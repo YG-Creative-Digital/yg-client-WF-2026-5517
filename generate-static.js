@@ -56,6 +56,14 @@ const FORCE_VISIBLE =
 // showed as a white frame around the full-bleed page. Reset it here.
 const BASE_RESET = 'html,body{margin:0;padding:0}';
 
+// Base font stack loaded by intake.html itself (public/intake.html:12) — backs every
+// fallback/accent font used by templates, not just the submission's chosen font(s).
+// Without this the deploy renders fallback text in a system font while the intake
+// draft (and src/lib/render-site.ts in-app preview) shows the real font — the
+// "differing fonts" parity bug. Keep in sync with render-site.ts BASE_FONT_IMPORT.
+const BASE_FONT_IMPORT =
+  "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Delicious+Handrawn&family=VT323&family=Fredoka:wght@500;600;700&family=Space+Mono:wght@400;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Space+Grotesk:wght@500;700&display=swap');";
+
 // ── Client runtime: widget (note mode + self-serve edit mode) ─────────────────
 // _widget.js is read at build time so widget-only updates need only that file.
 const WIDGET_CODE = fs.readFileSync(path.join(ROOT, '_widget.js'), 'utf8');
@@ -83,8 +91,13 @@ function varsToStyle(vars) {
 // Rewrite them to data-route here so every page navigates regardless of whether
 // it was edited. Pages captured normally already carry data-route and are untouched.
 function wireNav(html) {
+  // [^"]* tail: post-C3 handlers may carry a suffix ("…;return false",
+  // "…;wf2CloseNav()") — strip the whole handler either way. Post-C3 captures
+  // ship real <a href> anchors (data-route kept as a hint), so this stays a
+  // safety net for edit-mode captures only. Keep in sync with
+  // src/lib/render-site.ts and .claude/skills/preview-draft/render.js.
   return (html || '').replace(
-    /\s*onclick="wfGoPage\((['"])([^'"]+)\1\)"/g,
+    /\s*onclick="wfGoPage\((['"])([^'"]+)\1\)[^"]*"/g,
     (_m, _q, pg) => ` data-route="${pg === 'home' ? '/' : '/' + pg}"`
   );
 }
@@ -104,6 +117,7 @@ function pageHtml(bodyHtml) {
 <meta name="color-scheme" content="light">
 <title>${SITE_TITLE.replace(/</g, '&lt;')}</title>
 ${fontLink}
+<style>${BASE_FONT_IMPORT}</style>
 <style>${BASE_RESET}</style>
 <style>${prepareCSS(data.css)}</style>
 <style>${FORCE_VISIBLE}</style>
